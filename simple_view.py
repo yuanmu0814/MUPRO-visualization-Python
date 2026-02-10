@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 from typing import List, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
@@ -191,6 +192,53 @@ class SimpleView(QtWidgets.QMainWindow):
         self.camera.SetPosition(100, 100, 100)
         self.camera.SetFocalPoint(0, 0, 0)
         self.camera.SetViewUp(0, 0, 1)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        app_icon = QtWidgets.QApplication.windowIcon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
+        super().showEvent(event)
+        self._force_windows_taskbar_icon()
+        QtCore.QTimer.singleShot(0, self._force_windows_taskbar_icon)
+
+    def _force_windows_taskbar_icon(self) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            import ctypes
+        except Exception:
+            return
+
+        icon_candidates = [
+            QtCore.QDir.current().absoluteFilePath("Icons/mupro-logo-new.ico"),
+            QtCore.QDir.current().absoluteFilePath("Github/Icons/mupro-logo-new.ico"),
+        ]
+        icon_path = ""
+        for candidate in icon_candidates:
+            if os.path.isfile(candidate):
+                icon_path = candidate
+                break
+        if not icon_path:
+            return
+
+        hwnd = int(self.winId())
+        if hwnd == 0:
+            return
+
+        user32 = ctypes.windll.user32
+        image_icon = 1
+        wm_seticon = 0x0080
+        icon_small = 0
+        icon_big = 1
+        lr_loadfromfile = 0x0010
+        hicon_small = user32.LoadImageW(None, icon_path, image_icon, 16, 16, lr_loadfromfile)
+        hicon_big = user32.LoadImageW(None, icon_path, image_icon, 32, 32, lr_loadfromfile)
+        if hicon_small:
+            user32.SendMessageW(hwnd, wm_seticon, icon_small, hicon_small)
+            self._hicon_small = hicon_small
+        if hicon_big:
+            user32.SendMessageW(hwnd, wm_seticon, icon_big, hicon_big)
+            self._hicon_big = hicon_big
 
     def _setup_ui(self) -> None:
         self.vectorChoice.setView(QtWidgets.QListView())
