@@ -1,0 +1,29 @@
+<RCC>
+  <qresource prefix="/Icons">
+    <file>batch3D.png</file>
+    <file>batch3D.png</file>
+    <file>outputStatus.png</file>
+    <file>mupro-logo-new.png</file>
+    <file>outputStatus.png</file>
+    <file>loadStatus.png</file>
+    <file>dropdown.png</file>
+    <file>3d.png</file>
+    <file>2D.png</file>
+    <file>1D.png</file>
+    <file>clear-icon.png</file>
+    <file>Y+.png</file>
+    <file>X-.png</file>
+    <file>Z-.png</file>
+    <file>Z+.png</file>
+    <file>Y-.png</file>
+    <file>x+.png</file>
+    <file>refresh.png</file>
+    <file>domain-open.png</file>
+    <file>vector-open.png</file>
+    <file>scalar-open.png</file>
+    <file>fileopen.png</file>
+    <file>filesave.png</file>
+    <file>print.png</file>
+    <file>help.png</file>
+  </qresource>
+</RCC>
