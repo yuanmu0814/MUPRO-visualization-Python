@@ -211,7 +211,6 @@ class SimpleView(QtWidgets.QMainWindow):
 
         icon_candidates = [
             QtCore.QDir.current().absoluteFilePath("Icons/mupro-logo-new.ico"),
-            QtCore.QDir.current().absoluteFilePath("Github/Icons/mupro-logo-new.ico"),
         ]
         icon_path = ""
         for candidate in icon_candidates:
