@@ -113,6 +113,7 @@ class SimpleView(QtWidgets.QMainWindow):
         self.actorStream = vtk.vtkActor()
         self.vectorRTActor = vtk.vtkActor()
         self.actorScalar = vtk.vtkVolume()
+        self.coordRulerActor = vtk.vtkCubeAxesActor()
 
         self.actorDomain = [vtk.vtkActor() for _ in range(27)]
         self.actorIso: List[vtk.vtkActor] = []
@@ -123,6 +124,7 @@ class SimpleView(QtWidgets.QMainWindow):
         self.vectorLegendWidget = vtk.vtkScalarBarWidget()
         self.scalarScaleBarActor = vtk.vtkScalarBarActor()
         self.vectorScaleBarActor = vtk.vtkScalarBarActor()
+        self.coordRuler_CB: Optional[QtWidgets.QCheckBox] = None
 
         self.readerVectorOrigin = vtk.vtkStructuredPointsReader()
 
@@ -152,6 +154,28 @@ class SimpleView(QtWidgets.QMainWindow):
         self.M2mod = 0.1
         self.M1ang = 10.0 * PI_VALUE / 180.0
         self.M2ang = 10.0 * PI_VALUE / 180.0
+
+        self.coordRulerActor.SetXTitle("X")
+        self.coordRulerActor.SetYTitle("Y")
+        self.coordRulerActor.SetZTitle("Z")
+        self.coordRulerActor.SetXLabelFormat("%0.0f")
+        self.coordRulerActor.SetYLabelFormat("%0.0f")
+        self.coordRulerActor.SetZLabelFormat("%0.0f")
+        self.coordRulerActor.SetFlyModeToOuterEdges()
+        self.coordRulerActor.SetXAxisRange(1.0, 1.0)
+        self.coordRulerActor.SetYAxisRange(1.0, 1.0)
+        self.coordRulerActor.SetZAxisRange(1.0, 1.0)
+        ruler_color = (0.25, 0.25, 0.25)
+        self.coordRulerActor.GetXAxesLinesProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetYAxesLinesProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetZAxesLinesProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetXAxesLabelProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetYAxesLabelProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetZAxesLabelProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetXAxesTitleProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetYAxesTitleProperty().SetColor(*ruler_color)
+        self.coordRulerActor.GetZAxesTitleProperty().SetColor(*ruler_color)
+        self.coordRulerActor.VisibilityOff()
 
         self.domainOrth = [
             [0, 0, 0],
@@ -281,6 +305,11 @@ class SimpleView(QtWidgets.QMainWindow):
         self.alphaDomain_Table.setColumnWidth(0, 90)
         self.alphaDomain_Table.setColumnWidth(1, 90)
 
+        self.viewportSizeX.setText("2000")
+        self.viewportSizeY.setText("2000")
+        if not self.exportRatio.text().strip():
+            self.exportRatio.setText("1")
+
         interactor = self.qvtkWidget.GetRenderWindow().GetInteractor()
         interactor.Initialize()
         interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
@@ -313,6 +342,76 @@ class SimpleView(QtWidgets.QMainWindow):
             self.file1_Widget.figureReplot.connect(self.figurePlot)
         if hasattr(self.file2_Widget, "figureReplot"):
             self.file2_Widget.figureReplot.connect(self.figurePlot)
+        self._add_coordinate_ruler_page()
+
+    def _add_coordinate_ruler_page(self) -> None:
+        if not hasattr(self, "toolBox"):
+            return
+        page = QtWidgets.QWidget(self.toolBox)
+        page.setObjectName("page_coordinate_ruler")
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        self.coordRuler_CB = QtWidgets.QCheckBox("Show edge coordinate ruler", page)
+        self.coordRuler_CB.setObjectName("coordRuler_CB")
+        self.coordRuler_CB.setToolTip(
+            "Show coordinate ruler on visualization edges.\n"
+            "Ruler values follow extraction xyz range and start at 1."
+        )
+        self.coordRuler_CB.setCheckState(QtCore.Qt.Unchecked)
+        layout.addWidget(self.coordRuler_CB)
+
+        layout.addStretch(1)
+
+        self.toolBox.addItem(page, "Coordinate Ruler")
+        self.coordRuler_CB.stateChanged.connect(self.on_coordRuler_CB_stateChanged)
+
+    def _update_coordinate_ruler(
+        self,
+        renderer: Optional[vtk.vtkRenderer],
+        extent: Optional[tuple[int, int, int, int, int, int]],
+    ) -> None:
+        if renderer is None:
+            return
+        if not renderer.HasViewProp(self.coordRulerActor):
+            renderer.AddActor(self.coordRulerActor)
+
+        enabled = (
+            self.stackedWidget.currentIndex() == 0
+            and self.coordRuler_CB is not None
+            and self.coordRuler_CB.isChecked()
+            and extent is not None
+        )
+        if not enabled:
+            self.coordRulerActor.VisibilityOff()
+            return
+
+        xmin, xmax, ymin, ymax, zmin, zmax = extent
+        x0, x1_raw = sorted((xmin, xmax))
+        y0, y1_raw = sorted((ymin, ymax))
+        z0, z1_raw = sorted((zmin, zmax))
+
+        x1 = max(1.0, float(x0 + 1))
+        x2 = max(x1, float(x1_raw + 1))
+        y1 = max(1.0, float(y0 + 1))
+        y2 = max(y1, float(y1_raw + 1))
+        z1 = max(1.0, float(z0 + 1))
+        z2 = max(z1, float(z1_raw + 1))
+
+        self.coordRulerActor.SetBounds(
+            float(x0),
+            float(x1_raw),
+            float(y0),
+            float(y1_raw),
+            float(z0),
+            float(z1_raw),
+        )
+        self.coordRulerActor.SetXAxisRange(x1, x2)
+        self.coordRulerActor.SetYAxisRange(y1, y2)
+        self.coordRulerActor.SetZAxisRange(z1, z2)
+        self.coordRulerActor.SetCamera(renderer.GetActiveCamera())
+        self.coordRulerActor.VisibilityOn()
 
     def _init_renderer(self) -> None:
         if self.qvtkWidget.GetRenderWindow().GetRenderers().GetNumberOfItems() == 0:
@@ -321,6 +420,10 @@ class SimpleView(QtWidgets.QMainWindow):
         else:
             renderer = self.qvtkWidget.GetRenderWindow().GetRenderers().GetFirstRenderer()
         renderer.SetBackground(0.9, 0.9, 0.9)
+        if not renderer.HasViewProp(self.coordRulerActor):
+            renderer.AddActor(self.coordRulerActor)
+        self.coordRulerActor.SetCamera(renderer.GetActiveCamera())
+        self.coordRulerActor.VisibilityOff()
         self.qvtkWidget.GetRenderWindow().Render()
         self.qvtkWidget.update()
 
@@ -473,6 +576,7 @@ class SimpleView(QtWidgets.QMainWindow):
         self.actionRotateToZP.setEnabled(False)
         self.actionOutputStatus.setEnabled(False)
         self.actionLoadStatus.setEnabled(False)
+        self.coordRulerActor.VisibilityOff()
 
     def slotSwitch3D(self) -> None:
         self.stackedWidget.setCurrentIndex(0)
@@ -493,6 +597,8 @@ class SimpleView(QtWidgets.QMainWindow):
         self.actionRotateToZP.setEnabled(True)
         self.actionOutputStatus.setEnabled(True)
         self.actionLoadStatus.setEnabled(True)
+        if self.coordRuler_CB is not None and self.coordRuler_CB.isChecked():
+            self.slotUpdate()
 
     def slotUpdate(self) -> None:
         if self.stackedWidget.currentIndex() == 0:
@@ -733,9 +839,9 @@ class SimpleView(QtWidgets.QMainWindow):
 
             self.inputFileScalar.setText(file_info.fileName())
             self.rowcolScalar.setText(str(self.columns))
-            self.xMinMaxScalar.setText(f"0 - {self.xmax}")
-            self.yMinMaxScalar.setText(f"0 - {self.ymax}")
-            self.zMinMaxScalar.setText(f"0 - {self.zmax}")
+            self.xMinMaxScalar.setText(f"1 - {self.xmax + 1}")
+            self.yMinMaxScalar.setText(f"1 - {self.ymax + 1}")
+            self.zMinMaxScalar.setText(f"1 - {self.zmax + 1}")
 
             self.scalar_Table.clearContents()
             while self.scalar_Table.rowCount() > 0:
@@ -797,9 +903,9 @@ class SimpleView(QtWidgets.QMainWindow):
 
             self.inputFileVector.setText(file_info.fileName())
             self.rowcolVector.setText(str(self.columns))
-            self.xMinMaxVector.setText(f"0 - {self.xmax}")
-            self.yMinMaxVector.setText(f"0 - {self.ymax}")
-            self.zMinMaxVector.setText(f"0 - {self.zmax}")
+            self.xMinMaxVector.setText(f"1 - {self.xmax + 1}")
+            self.yMinMaxVector.setText(f"1 - {self.ymax + 1}")
+            self.zMinMaxVector.setText(f"1 - {self.zmax + 1}")
 
             self.vector_Table.clearContents()
             while self.vector_Table.rowCount() > 0:
@@ -877,9 +983,9 @@ class SimpleView(QtWidgets.QMainWindow):
                 self.outputDomain(self.domainDir.absoluteFilePath(), self.xmax, self.ymax, self.zmax)
                 self.inputFileDomain.setText(file_info.fileName())
                 self.rowcolDomain.setText(str(self.columns))
-                self.xMinMaxDomain.setText(f"0 - {self.xmax}")
-                self.yMinMaxDomain.setText(f"0 - {self.ymax}")
-                self.zMinMaxDomain.setText(f"0 - {self.zmax}")
+                self.xMinMaxDomain.setText(f"1 - {self.xmax + 1}")
+                self.yMinMaxDomain.setText(f"1 - {self.ymax + 1}")
+                self.zMinMaxDomain.setText(f"1 - {self.zmax + 1}")
 
                 self.domain_Table.clearContents()
                 while self.domain_Table.rowCount() > 0:
@@ -975,12 +1081,12 @@ class SimpleView(QtWidgets.QMainWindow):
         self.ymin = 0
         self.zmin = 0
 
-        self.xmin_LE.setText(str(self.xminAll))
-        self.ymin_LE.setText(str(self.yminAll))
-        self.zmin_LE.setText(str(self.zminAll))
-        self.xmax_LE.setText(str(self.xmaxAll))
-        self.ymax_LE.setText(str(self.ymaxAll))
-        self.zmax_LE.setText(str(self.zmaxAll))
+        self.xmin_LE.setText(str(self.xminAll + 1))
+        self.ymin_LE.setText(str(self.yminAll + 1))
+        self.zmin_LE.setText(str(self.zminAll + 1))
+        self.xmax_LE.setText(str(self.xmaxAll + 1))
+        self.ymax_LE.setText(str(self.ymaxAll + 1))
+        self.zmax_LE.setText(str(self.zmaxAll + 1))
 
         total_points = (self.xmaxAll - self.xminAll + 1) * (self.ymaxAll - self.yminAll + 1) * (self.zmaxAll - self.zminAll + 1)
         interval = 1
@@ -1180,6 +1286,63 @@ class SimpleView(QtWidgets.QMainWindow):
             lightness = (pz / magnitude + 1) / 2.0 if magnitude != 0 else 0.5
         return self.convertHSLToRGB(hue, saturation, lightness)
 
+    def _safe_int_from_lineedit(self, edit: QtWidgets.QLineEdit, default_value: int) -> int:
+        text = edit.text().strip()
+        if not text:
+            return default_value
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except ValueError:
+                return default_value
+
+    def _get_clamped_extraction_voi(self, extent: tuple[int, int, int, int, int, int]) -> tuple[int, int, int, int, int, int]:
+        xmin_ui = self._safe_int_from_lineedit(self.xmin_LE, extent[0] + 1)
+        xmax_ui = self._safe_int_from_lineedit(self.xmax_LE, extent[1] + 1)
+        ymin_ui = self._safe_int_from_lineedit(self.ymin_LE, extent[2] + 1)
+        ymax_ui = self._safe_int_from_lineedit(self.ymax_LE, extent[3] + 1)
+        zmin_ui = self._safe_int_from_lineedit(self.zmin_LE, extent[4] + 1)
+        zmax_ui = self._safe_int_from_lineedit(self.zmax_LE, extent[5] + 1)
+
+        use_zero_based_input = min(xmin_ui, xmax_ui, ymin_ui, ymax_ui, zmin_ui, zmax_ui) <= 0
+        if use_zero_based_input:
+            xmin, xmax = xmin_ui, xmax_ui
+            ymin, ymax = ymin_ui, ymax_ui
+            zmin, zmax = zmin_ui, zmax_ui
+        else:
+            xmin, xmax = xmin_ui - 1, xmax_ui - 1
+            ymin, ymax = ymin_ui - 1, ymax_ui - 1
+            zmin, zmax = zmin_ui - 1, zmax_ui - 1
+
+        xmin = max(extent[0], min(xmin, extent[1]))
+        xmax = max(extent[0], min(xmax, extent[1]))
+        ymin = max(extent[2], min(ymin, extent[3]))
+        ymax = max(extent[2], min(ymax, extent[3]))
+        zmin = max(extent[4], min(zmin, extent[5]))
+        zmax = max(extent[4], min(zmax, extent[5]))
+
+        if xmin > xmax:
+            xmin, xmax = xmax, xmin
+        if ymin > ymax:
+            ymin, ymax = ymax, ymin
+        if zmin > zmax:
+            zmin, zmax = zmax, zmin
+
+        self.xminAll, self.xmaxAll = xmin, xmax
+        self.yminAll, self.ymaxAll = ymin, ymax
+        self.zminAll, self.zmaxAll = zmin, zmax
+
+        self.xmin_LE.setText(str(xmin + 1))
+        self.xmax_LE.setText(str(xmax + 1))
+        self.ymin_LE.setText(str(ymin + 1))
+        self.ymax_LE.setText(str(ymax + 1))
+        self.zmin_LE.setText(str(zmin + 1))
+        self.zmax_LE.setText(str(zmax + 1))
+
+        return xmin, xmax, ymin, ymax, zmin, zmax
+
     def updateVTK(self, scalarname: str, vectorname: str) -> None:
         fileNameScalar = scalarname
         fileNameVector = vectorname
@@ -1199,6 +1362,7 @@ class SimpleView(QtWidgets.QMainWindow):
         colorScalar.SetColorSpaceToLab()
         colorVector.SetColorSpaceToLab()
         vector_mapper = None
+        ruler_extent: Optional[tuple[int, int, int, int, int, int]] = None
 
         renderer.SetBackground(0.9, 0.9, 0.9)
         renderer.AddActor(self.actorScalar)
@@ -1217,32 +1381,14 @@ class SimpleView(QtWidgets.QMainWindow):
 
             readerScalar = vtk.vtkExtractVOI()
             readerScalar.SetInputConnection(readerScalarOrigin.GetOutputPort())
+            scalar_extent = tuple(int(v) for v in readerScalarOrigin.GetOutput().GetExtent())
             if self.extract_CB.checkState():
-                extent = readerScalarOrigin.GetOutput().GetExtent()
-                self.xminAll = int(self.xmin_LE.text() or extent[0])
-                self.yminAll = int(self.ymin_LE.text() or extent[2])
-                self.zminAll = int(self.zmin_LE.text() or extent[4])
-                self.xmaxAll = int(self.xmax_LE.text() or extent[1])
-                self.ymaxAll = int(self.ymax_LE.text() or extent[3])
-                self.zmaxAll = int(self.zmax_LE.text() or extent[5])
-                self.xminAll = max(extent[0], min(self.xminAll, extent[1]))
-                self.xmaxAll = max(extent[0], min(self.xmaxAll, extent[1]))
-                self.yminAll = max(extent[2], min(self.yminAll, extent[3]))
-                self.ymaxAll = max(extent[2], min(self.ymaxAll, extent[3]))
-                self.zminAll = max(extent[4], min(self.zminAll, extent[5]))
-                self.zmaxAll = max(extent[4], min(self.zmaxAll, extent[5]))
-                if self.xminAll > self.xmaxAll:
-                    self.xminAll, self.xmaxAll = self.xmaxAll, self.xminAll
-                if self.yminAll > self.ymaxAll:
-                    self.yminAll, self.ymaxAll = self.ymaxAll, self.yminAll
-                if self.zminAll > self.zmaxAll:
-                    self.zminAll, self.zmaxAll = self.zmaxAll, self.zminAll
-                readerScalar.SetVOI(
-                    self.xminAll, self.xmaxAll, self.yminAll, self.ymaxAll, self.zminAll, self.zmaxAll
-                )
+                scalar_voi = self._get_clamped_extraction_voi(scalar_extent)
+                readerScalar.SetVOI(*scalar_voi)
+                ruler_extent = scalar_voi
             else:
-                extent = readerScalarOrigin.GetOutput().GetExtent()
-                readerScalar.SetVOI(extent)
+                readerScalar.SetVOI(scalar_extent)
+                ruler_extent = scalar_extent
             readerScalar.Update()
 
             if self.scalarRange_CB.isChecked():
@@ -1335,24 +1481,16 @@ class SimpleView(QtWidgets.QMainWindow):
                 int(self.yDelta_LE.text() or 1),
                 int(self.zDelta_LE.text() or 1),
             )
+            vector_extent = tuple(int(v) for v in self.readerVectorOrigin.GetOutput().GetExtent())
             if self.extract_CB.checkState():
-                extent = self.readerVectorOrigin.GetOutput().GetExtent()
-                xmin = max(extent[0], min(self.xminAll, extent[1]))
-                xmax = max(extent[0], min(self.xmaxAll, extent[1]))
-                ymin = max(extent[2], min(self.yminAll, extent[3]))
-                ymax = max(extent[2], min(self.ymaxAll, extent[3]))
-                zmin = max(extent[4], min(self.zminAll, extent[5]))
-                zmax = max(extent[4], min(self.zmaxAll, extent[5]))
-                if xmin > xmax:
-                    xmin, xmax = xmax, xmin
-                if ymin > ymax:
-                    ymin, ymax = ymax, ymin
-                if zmin > zmax:
-                    zmin, zmax = zmax, zmin
-                readerVector.SetVOI(xmin, xmax, ymin, ymax, zmin, zmax)
+                vector_voi = self._get_clamped_extraction_voi(vector_extent)
+                readerVector.SetVOI(*vector_voi)
+                if ruler_extent is None:
+                    ruler_extent = vector_voi
             else:
-                extent = self.readerVectorOrigin.GetOutput().GetExtent()
-                readerVector.SetVOI(extent)
+                readerVector.SetVOI(vector_extent)
+                if ruler_extent is None:
+                    ruler_extent = vector_extent
             readerVector.Update()
 
             maskVector = vtk.vtkMaskPoints()
@@ -1640,6 +1778,8 @@ class SimpleView(QtWidgets.QMainWindow):
             self.vectorRTActor.SetVisibility(False)
             self.vectorScaleBarActor.SetVisibility(False)
 
+        self._update_coordinate_ruler(renderer, ruler_extent)
+
         if self.reset:
             self.updateCamera(-1)
             self.reset = False
@@ -1675,6 +1815,7 @@ class SimpleView(QtWidgets.QMainWindow):
             self.camera.SetFocalPoint(0, 0, 0)
             self.camera.SetViewUp(0, 1, 0)
         renderer.SetActiveCamera(self.camera)
+        self.coordRulerActor.SetCamera(renderer.GetActiveCamera())
         self.qvtkWidget.GetRenderWindow().Render()
         self.qvtkWidget.update()
         self.camera = renderer.GetActiveCamera()
@@ -1685,6 +1826,22 @@ class SimpleView(QtWidgets.QMainWindow):
             self.widget.On()
         else:
             self.widget.Off()
+        self.qvtkWidget.GetRenderWindow().Render()
+
+    def on_coordRuler_CB_stateChanged(self, state: int) -> None:
+        enabled = bool(state)
+        if (
+            enabled
+            and self.stackedWidget.currentIndex() == 0
+            and (
+                (self.scalarName and os.path.isfile(self.scalarName))
+                or (self.vectorName and os.path.isfile(self.vectorName))
+                or (self.domainName and os.path.isfile(self.domainName))
+            )
+        ):
+            self.slotUpdate()
+            return
+        self.coordRulerActor.SetVisibility(enabled and self.stackedWidget.currentIndex() == 0)
         self.qvtkWidget.GetRenderWindow().Render()
 
     def on_outline_CB_stateChanged(self, state: int) -> None:
@@ -1950,23 +2107,34 @@ class SimpleView(QtWidgets.QMainWindow):
         self.zmin_LE.setEnabled(enabled)
         self.zmax_LE.setEnabled(enabled)
 
+    def _refresh_after_extraction_edit(self) -> None:
+        if self.stackedWidget.currentIndex() != 0 or not self.extract_CB.isChecked():
+            return
+        has_visual_data = (
+            (self.scalar_CB.isChecked() and self.scalarName and os.path.isfile(self.scalarName))
+            or (self.vector_CB.isChecked() and self.vectorName and os.path.isfile(self.vectorName))
+            or (self.domain_CB.isChecked() and self.domainName and os.path.isfile(self.domainName))
+        )
+        if has_visual_data:
+            self.slotUpdate()
+
     def on_xmin_LE_editingFinished(self) -> None:
-        pass
+        self._refresh_after_extraction_edit()
 
     def on_xmax_LE_editingFinished(self) -> None:
-        pass
+        self._refresh_after_extraction_edit()
 
     def on_ymin_LE_editingFinished(self) -> None:
-        pass
+        self._refresh_after_extraction_edit()
 
     def on_ymax_LE_editingFinished(self) -> None:
-        pass
+        self._refresh_after_extraction_edit()
 
     def on_zmin_LE_editingFinished(self) -> None:
-        pass
+        self._refresh_after_extraction_edit()
 
     def on_zmax_LE_editingFinished(self) -> None:
-        pass
+        self._refresh_after_extraction_edit()
 
     def on_scalarRange_CB_stateChanged(self, state: int) -> None:
         enabled = bool(state)
@@ -2546,6 +2714,10 @@ class SimpleView(QtWidgets.QMainWindow):
         domainRenderer.SetBackground(0.9, 0.9, 0.9)
         domainRenderer.AddActor(self.outlineDomainActor)
         self.outlineDomainActor.SetVisibility(self.outline_CB.checkState() != 0)
+        self._update_coordinate_ruler(
+            domainRenderer,
+            (0, self.xmax + 2, 0, self.ymax + 2, 0, self.zmax + 2),
+        )
 
         if self.reset:
             self.updateCamera(-1)
@@ -2647,6 +2819,10 @@ class SimpleView(QtWidgets.QMainWindow):
         domainRenderer.SetBackground(0.9, 0.9, 0.9)
         domainRenderer.AddActor(self.outlineDomainActor)
         self.outlineDomainActor.SetVisibility(self.outline_CB.checkState() != 0)
+        self._update_coordinate_ruler(
+            domainRenderer,
+            (0, self.xmax + 2, 0, self.ymax + 2, 0, self.zmax + 2),
+        )
 
         if self.reset:
             self.updateCamera(-1)
@@ -2860,7 +3036,10 @@ class SimpleView(QtWidgets.QMainWindow):
         if self.stackedWidget.currentIndex() == 0:
             self.outputImage(file_path)
         else:
-            self.customPlot.savePng(file_path)
+            target_w = self._safe_positive_int(self.viewportSizeX.text(), 2000)
+            target_h = self._safe_positive_int(self.viewportSizeY.text(), 2000)
+            magnify = self._safe_positive_int(self.exportRatio.text(), 1)
+            self.customPlot.savePng(file_path, target_w * magnify, target_h * magnify, 600)
 
     def saveScene(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save file", "", "Images (*.x3d)")
@@ -2873,23 +3052,87 @@ class SimpleView(QtWidgets.QMainWindow):
             exporter.Update()
             exporter.Write()
 
+    def _safe_positive_int(self, text: str, default: int) -> int:
+        try:
+            value = int(float(text))
+        except ValueError:
+            return default
+        return value if value > 0 else default
+
+    def _fit_export_size_to_view_aspect(
+        self, view_w: int, view_h: int, req_w: int, req_h: int
+    ) -> tuple[int, int]:
+        view_w = max(1, int(view_w))
+        view_h = max(1, int(view_h))
+        req_w = max(1, int(req_w))
+        req_h = max(1, int(req_h))
+        view_ratio = view_w / float(view_h)
+        req_ratio = req_w / float(req_h)
+        if abs(req_ratio - view_ratio) <= max(1e-6, view_ratio * 0.01):
+            return req_w, req_h
+        if req_w >= req_h:
+            fitted_w = req_w
+            fitted_h = max(1, int(round(fitted_w / view_ratio)))
+        else:
+            fitted_h = req_h
+            fitted_w = max(1, int(round(fitted_h * view_ratio)))
+        return fitted_w, fitted_h
+
     def outputImage(self, load: str) -> None:
-        window_to_image = vtk.vtkWindowToImageFilter()
-        window_to_image.SetInput(self.qvtkWidget.GetRenderWindow())
-        magnify = int(self.exportRatio.text() or 1)
-        if magnify <= 0:
-            magnify = 1
-        window_to_image.SetScale(magnify)
-        window_to_image.SetInputBufferTypeToRGBA()
-        window_to_image.FixBoundaryOff()
-        window_to_image.ReadFrontBufferOn()
-        window_to_image.Update()
-        writer = vtk.vtkPNGWriter()
-        writer.SetFileName(load)
-        writer.SetInputConnection(window_to_image.GetOutputPort())
-        self.qvtkWidget.GetRenderWindow().Render()
-        writer.Write()
-        self.qvtkWidget.GetRenderWindow().Render()
+        render_window = self.qvtkWidget.GetRenderWindow()
+        render_window.Render()
+        self.qvtkWidget.update()
+        QtWidgets.QApplication.processEvents()
+
+        target_w = self._safe_positive_int(self.viewportSizeX.text(), 2000)
+        target_h = self._safe_positive_int(self.viewportSizeY.text(), 2000)
+        magnify = self._safe_positive_int(self.exportRatio.text(), 1)
+        current_w, current_h = render_window.GetSize()
+        fit_w, fit_h = self._fit_export_size_to_view_aspect(
+            current_w,
+            current_h,
+            target_w,
+            target_h,
+        )
+        out_w = max(1, fit_w * magnify)
+        out_h = max(1, fit_h * magnify)
+        original_w, original_h = render_window.GetSize()
+
+        try:
+            render_window.SetSize(out_w, out_h)
+            render_window.Render()
+            QtWidgets.QApplication.processEvents()
+
+            window_to_image = vtk.vtkWindowToImageFilter()
+            window_to_image.SetInput(render_window)
+            window_to_image.SetScale(1)
+            window_to_image.SetInputBufferTypeToRGBA()
+            window_to_image.FixBoundaryOff()
+            window_to_image.ReadFrontBufferOff()
+            window_to_image.ShouldRerenderOn()
+            window_to_image.UpdateWholeExtent()
+
+            writer = vtk.vtkPNGWriter()
+            writer.SetFileName(load)
+            writer.SetInputConnection(window_to_image.GetOutputPort())
+            render_window.Render()
+            window_to_image.Modified()
+            writer.Write()
+            self._apply_png_dpi(load, 600)
+        finally:
+            render_window.SetSize(original_w, original_h)
+            render_window.Render()
+            self.qvtkWidget.update()
+
+
+    def _apply_png_dpi(self, path: str, dpi: int = 600) -> None:
+        image = QtGui.QImage(path)
+        if image.isNull():
+            return
+        dots_per_meter = int(round(dpi / 0.0254))
+        image.setDotsPerMeterX(dots_per_meter)
+        image.setDotsPerMeterY(dots_per_meter)
+        image.save(path, "PNG")
 
     def on_cameraSet_PB_released(self) -> None:
         try:
@@ -3020,6 +3263,8 @@ class SimpleView(QtWidgets.QMainWindow):
                 f.write(f"{int(self.vo2Domain_LW.item(i).checkState())}\n")
             f.write(f"{self.vo2_M1_mod_LE.text()} {self.vo2_M1_ang_LE.text()}\n")
             f.write(f"{self.vo2_M2_mod_LE.text()} {self.vo2_M2_ang_LE.text()}\n")
+            if self.coordRuler_CB is not None:
+                f.write(f"{int(self.coordRuler_CB.checkState())}\n")
 
     def slotOutputStatus(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save file", "", "Status (*.txt)")
@@ -3203,6 +3448,12 @@ class SimpleView(QtWidgets.QMainWindow):
         self.vo2_M1_ang_LE.setText(next(it))
         self.vo2_M2_mod_LE.setText(next(it))
         self.vo2_M2_ang_LE.setText(next(it))
+        try:
+            coord_ruler_state = int(next(it))
+        except StopIteration:
+            coord_ruler_state = 0
+        if self.coordRuler_CB is not None:
+            self.coordRuler_CB.setCheckState(coord_ruler_state)
 
     def slotLoadStatus(self) -> str:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Status input", "", "Status input (*.*)")
