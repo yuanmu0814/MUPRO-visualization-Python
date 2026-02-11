@@ -35,12 +35,24 @@ def _resolve_app_icon(base: str) -> QtGui.QIcon:
     return _build_fallback_icon()
 
 
+def _get_base_path() -> str:
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            return sys._MEIPASS
+        try:
+            main_mod = sys.modules.get("__main__")
+            if main_mod and hasattr(main_mod, "__compiled__"):
+                comp = main_mod.__compiled__
+                if hasattr(comp, "containing_dir_path"):
+                    return comp.containing_dir_path
+        except Exception:
+            pass
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def main() -> int:
-    is_frozen = getattr(sys, "frozen", False)
-    if is_frozen:
-        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
+    base = _get_base_path()
 
     os.chdir(base)
     app = QtWidgets.QApplication(sys.argv)

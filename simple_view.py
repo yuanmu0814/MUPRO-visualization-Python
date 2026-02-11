@@ -125,6 +125,30 @@ class SimpleView(QtWidgets.QMainWindow):
         self.scalarScaleBarActor = vtk.vtkScalarBarActor()
         self.vectorScaleBarActor = vtk.vtkScalarBarActor()
         self.coordRuler_CB: Optional[QtWidgets.QCheckBox] = None
+        self.pointProbe_CB: Optional[QtWidgets.QCheckBox] = None
+        self.pointProbeCoordValue_LB: Optional[QtWidgets.QLabel] = None
+        self.pointProbeIndexValue_LB: Optional[QtWidgets.QLabel] = None
+        self.pointProbeDataValue_LB: Optional[QtWidgets.QLabel] = None
+        self.pointProbeSourceValue_LB: Optional[QtWidgets.QLabel] = None
+        self._pointProbeObserverTag: Optional[int] = None
+        self._pointProbeStyleObserverTag: Optional[int] = None
+        self._pointProbePicker = vtk.vtkCellPicker()
+        self._pointProbeWorldPicker = vtk.vtkWorldPointPicker()
+        self._pointProbePicker.SetTolerance(0.0005)
+        self._pointProbeScalarReader: Optional[vtk.vtkStructuredPointsReader] = None
+        self._pointProbeScalarExtractor: Optional[vtk.vtkExtractVOI] = None
+        self._pointProbeScalarOutput: Optional[vtk.vtkImageData] = None
+        self._pointProbeScalarColumn: Optional[int] = None
+        self._pointProbeVectorExtractor: Optional[vtk.vtkExtractVOI] = None
+        self._pointProbeVectorOutput: Optional[vtk.vtkImageData] = None
+        self._pointProbeVectorColumns: Optional[str] = None
+        self._middlePanObserverPressTag: Optional[int] = None
+        self._middlePanObserverReleaseTag: Optional[int] = None
+        self._middlePanObserverMoveTag: Optional[int] = None
+        self._middlePanActive = False
+        self._middlePanCamera: Optional[vtk.vtkCamera] = None
+        self._middlePanViewDirection: Optional[tuple[float, float, float]] = None
+        self._middlePanViewUp: Optional[tuple[float, float, float]] = None
 
         self.readerVectorOrigin = vtk.vtkStructuredPointsReader()
 
@@ -158,9 +182,9 @@ class SimpleView(QtWidgets.QMainWindow):
         self.coordRulerActor.SetXTitle("X")
         self.coordRulerActor.SetYTitle("Y")
         self.coordRulerActor.SetZTitle("Z")
-        self.coordRulerActor.SetXLabelFormat("%0.0f")
-        self.coordRulerActor.SetYLabelFormat("%0.0f")
-        self.coordRulerActor.SetZLabelFormat("%0.0f")
+        self.coordRulerActor.SetXLabelFormat("%g")
+        self.coordRulerActor.SetYLabelFormat("%g")
+        self.coordRulerActor.SetZLabelFormat("%g")
         self.coordRulerActor.SetFlyModeToOuterEdges()
         self.coordRulerActor.SetXAxisRange(1.0, 1.0)
         self.coordRulerActor.SetYAxisRange(1.0, 1.0)
@@ -312,7 +336,20 @@ class SimpleView(QtWidgets.QMainWindow):
 
         interactor = self.qvtkWidget.GetRenderWindow().GetInteractor()
         interactor.Initialize()
-        interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
+        interactor_style = vtk.vtkInteractorStyleTrackballCamera()
+        interactor.SetInteractorStyle(interactor_style)
+        self._pointProbeObserverTag = interactor_style.AddObserver(
+            "LeftButtonPressEvent", self._on_vtk_left_button_press
+        )
+        self._middlePanObserverPressTag = interactor.AddObserver(
+            "MiddleButtonPressEvent", self._on_vtk_middle_button_press, -1.0
+        )
+        self._middlePanObserverReleaseTag = interactor.AddObserver(
+            "MiddleButtonReleaseEvent", self._on_vtk_middle_button_release, -1.0
+        )
+        self._middlePanObserverMoveTag = interactor.AddObserver(
+            "MouseMoveEvent", self._on_vtk_mouse_move_lock_pan, -1.0
+        )
         self.widget.SetInteractor(interactor)
         self.vectorOrientationLegend.SetInteractor(interactor)
         self.scalarLegendWidget.SetInteractor(interactor)
@@ -343,6 +380,7 @@ class SimpleView(QtWidgets.QMainWindow):
         if hasattr(self.file2_Widget, "figureReplot"):
             self.file2_Widget.figureReplot.connect(self.figurePlot)
         self._add_coordinate_ruler_page()
+        self._add_point_probe_page()
 
     def _add_coordinate_ruler_page(self) -> None:
         if not hasattr(self, "toolBox"):
@@ -366,6 +404,453 @@ class SimpleView(QtWidgets.QMainWindow):
 
         self.toolBox.addItem(page, "Coordinate Ruler")
         self.coordRuler_CB.stateChanged.connect(self.on_coordRuler_CB_stateChanged)
+
+    def _add_point_probe_page(self) -> None:
+        if not hasattr(self, "toolBox"):
+            return
+        page = QtWidgets.QWidget(self.toolBox)
+        page.setObjectName("page_point_probe")
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        self.pointProbe_CB = QtWidgets.QCheckBox("Enable point probe", page)
+        self.pointProbe_CB.setObjectName("pointProbe_CB")
+        self.pointProbe_CB.setToolTip(
+            "Click in the 3D visualization to inspect point coordinates.\n"
+            "Scalar mode: original scalar value.\n"
+            "Vector mode: magnitude and angles to X/Y/Z axes."
+        )
+        self.pointProbe_CB.setCheckState(QtCore.Qt.Unchecked)
+        layout.addWidget(self.pointProbe_CB)
+
+        self.pointProbeCoordValue_LB = QtWidgets.QLabel("-", page)
+        self.pointProbeIndexValue_LB = QtWidgets.QLabel("-", page)
+        self.pointProbeDataValue_LB = QtWidgets.QLabel("-", page)
+        self.pointProbeSourceValue_LB = QtWidgets.QLabel("-", page)
+        labels = (
+            self.pointProbeCoordValue_LB,
+            self.pointProbeIndexValue_LB,
+            self.pointProbeDataValue_LB,
+            self.pointProbeSourceValue_LB,
+        )
+        for label in labels:
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+            label.setStyleSheet("padding-left: 12px;")
+
+        def _add_probe_block(title_text: str, value_label: QtWidgets.QLabel) -> None:
+            title_label = QtWidgets.QLabel(title_text, page)
+            title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            layout.addWidget(title_label)
+            layout.addWidget(value_label)
+
+        _add_probe_block("World coordinate:", self.pointProbeCoordValue_LB)
+        _add_probe_block("Grid index (1-based):", self.pointProbeIndexValue_LB)
+        _add_probe_block("Probe result:", self.pointProbeDataValue_LB)
+        _add_probe_block("Source:", self.pointProbeSourceValue_LB)
+        layout.addStretch(1)
+
+        self.toolBox.addItem(page, "Point Probe")
+        self.pointProbe_CB.stateChanged.connect(self.on_pointProbe_CB_stateChanged)
+        self._reset_point_probe_display()
+        self._refresh_point_probe_source()
+
+    def _set_point_probe_label(
+        self, label: Optional[QtWidgets.QLabel], text: str
+    ) -> None:
+        if label is not None:
+            label.setText(text)
+
+    def _reset_point_probe_display(self) -> None:
+        self._set_point_probe_label(self.pointProbeCoordValue_LB, "-")
+        self._set_point_probe_label(self.pointProbeIndexValue_LB, "-")
+        if self.pointProbe_CB is not None and self.pointProbe_CB.isChecked():
+            self._set_point_probe_hint()
+        else:
+            self._set_point_probe_label(self.pointProbeDataValue_LB, "Point probe is disabled.")
+
+    def _current_point_probe_mode(self) -> str:
+        if self.vector_CB.isChecked() and self._pointProbeVectorOutput is not None:
+            return "vector"
+        if self.scalar_CB.isChecked() and self._pointProbeScalarOutput is not None:
+            return "scalar"
+        if self._pointProbeVectorOutput is not None and self._pointProbeScalarOutput is None:
+            return "vector"
+        if self._pointProbeScalarOutput is not None:
+            return "scalar"
+        return "none"
+
+    def _set_point_probe_hint(self) -> None:
+        mode = self._current_point_probe_mode()
+        if mode == "vector":
+            self._set_point_probe_label(
+                self.pointProbeDataValue_LB, "Click a point to view magnitude and X/Y/Z angles."
+            )
+        elif mode == "scalar":
+            self._set_point_probe_label(
+                self.pointProbeDataValue_LB, "Click a point to view original scalar value."
+            )
+        elif self.vector_CB.isChecked():
+            self._set_point_probe_label(self.pointProbeDataValue_LB, "No vector field loaded.")
+        elif self.scalar_CB.isChecked():
+            self._set_point_probe_label(self.pointProbeDataValue_LB, "No scalar field loaded.")
+        else:
+            self._set_point_probe_label(self.pointProbeDataValue_LB, "No probe data loaded.")
+
+    def _refresh_point_probe_source(self) -> None:
+        mode = self._current_point_probe_mode()
+        if mode == "vector":
+            if self._pointProbeVectorColumns:
+                self._set_point_probe_label(
+                    self.pointProbeSourceValue_LB, f"Vector columns:\n{self._pointProbeVectorColumns}"
+                )
+            else:
+                self._set_point_probe_label(self.pointProbeSourceValue_LB, "Vector columns unknown.")
+            return
+        if mode == "scalar":
+            if self._pointProbeScalarColumn is None:
+                self._set_point_probe_label(self.pointProbeSourceValue_LB, "Scalar column unknown.")
+            else:
+                self._set_point_probe_label(
+                    self.pointProbeSourceValue_LB, f"Scalar column:\n{self._pointProbeScalarColumn}"
+                )
+            return
+        if self.vector_CB.isChecked():
+            self._set_point_probe_label(self.pointProbeSourceValue_LB, "No vector field loaded.")
+        elif self.scalar_CB.isChecked():
+            self._set_point_probe_label(self.pointProbeSourceValue_LB, "No scalar field loaded.")
+        else:
+            self._set_point_probe_label(self.pointProbeSourceValue_LB, "No probe data loaded.")
+
+    def _sample_grid_index_and_point_id(
+        self, image: Optional[vtk.vtkImageData], world_pos: tuple[float, float, float]
+    ) -> tuple[Optional[tuple[int, int, int]], int]:
+        if image is None:
+            return None, -1
+
+        extent = image.GetExtent()
+        i_min, i_max, j_min, j_max, k_min, k_max = extent
+
+        if hasattr(image, "TransformPhysicalPointToContinuousIndex"):
+            continuous_ijk = [0.0, 0.0, 0.0]
+            image.TransformPhysicalPointToContinuousIndex(world_pos, continuous_ijk)
+            i = int(round(continuous_ijk[0]))
+            j = int(round(continuous_ijk[1]))
+            k = int(round(continuous_ijk[2]))
+        else:
+            origin = image.GetOrigin()
+            spacing = image.GetSpacing()
+
+            def _coord_to_index(
+                coord: float, axis_origin: float, axis_spacing: float, low: int, high: int
+            ) -> int:
+                if math.isclose(axis_spacing, 0.0):
+                    return low
+                raw_index = int(round((coord - axis_origin) / axis_spacing))
+                return max(low, min(high, raw_index))
+
+            i = _coord_to_index(world_pos[0], origin[0], spacing[0], i_min, i_max)
+            j = _coord_to_index(world_pos[1], origin[1], spacing[1], j_min, j_max)
+            k = _coord_to_index(world_pos[2], origin[2], spacing[2], k_min, k_max)
+
+        if i < i_min or i > i_max or j < j_min or j > j_max or k < k_min or k > k_max:
+            return None, -1
+
+        point_id = image.ComputePointId((i, j, k))
+        return (i, j, k), point_id
+
+    def _sample_scalar_value_at_world(
+        self, world_pos: tuple[float, float, float]
+    ) -> tuple[Optional[tuple[int, int, int]], Optional[float]]:
+        image = self._pointProbeScalarOutput
+        index_ijk, point_id = self._sample_grid_index_and_point_id(image, world_pos)
+        if index_ijk is None:
+            return None, None
+        if point_id < 0:
+            return index_ijk, None
+
+        scalars = image.GetPointData().GetScalars()
+        if scalars is None or point_id >= scalars.GetNumberOfTuples():
+            return index_ijk, None
+
+        return index_ijk, float(scalars.GetTuple1(point_id))
+
+    def _sample_vector_value_at_world(
+        self, world_pos: tuple[float, float, float]
+    ) -> tuple[Optional[tuple[int, int, int]], Optional[tuple[float, float, float]], Optional[float]]:
+        image = self._pointProbeVectorOutput
+        index_ijk, point_id = self._sample_grid_index_and_point_id(image, world_pos)
+        if index_ijk is None:
+            return None, None, None
+        if point_id < 0:
+            return index_ijk, None, None
+
+        point_data = image.GetPointData()
+        vectors = point_data.GetVectors()
+        if vectors is None:
+            vectors = point_data.GetArray("vector")
+
+        vector_value: Optional[tuple[float, float, float]] = None
+        if vectors is not None and point_id < vectors.GetNumberOfTuples():
+            vector_tuple = vectors.GetTuple(point_id)
+            if len(vector_tuple) >= 3:
+                vector_value = (
+                    float(vector_tuple[0]),
+                    float(vector_tuple[1]),
+                    float(vector_tuple[2]),
+                )
+
+        magnitude: Optional[float] = None
+        scalars = point_data.GetScalars()
+        if scalars is not None and point_id < scalars.GetNumberOfTuples():
+            magnitude = float(scalars.GetTuple1(point_id))
+        elif vector_value is not None:
+            vx, vy, vz = vector_value
+            magnitude = math.sqrt(vx * vx + vy * vy + vz * vz)
+
+        return index_ijk, vector_value, magnitude
+
+    def _format_vector_probe_text(
+        self, vector_value: Optional[tuple[float, float, float]], magnitude: Optional[float]
+    ) -> str:
+        if vector_value is None:
+            if magnitude is None:
+                return "Vector value unavailable."
+            return f"|V|: {magnitude:.8g}"
+
+        vx, vy, vz = vector_value
+        mag = magnitude
+        if mag is None:
+            mag = math.sqrt(vx * vx + vy * vy + vz * vz)
+        if not math.isfinite(mag) or mag <= 1.0e-12:
+            return (
+                f"Vx: {vx:.8g}\n"
+                f"Vy: {vy:.8g}\n"
+                f"Vz: {vz:.8g}\n"
+                f"|V|: {mag:.8g}\n"
+                "Ang-X: undefined\n"
+                "Ang-Y: undefined\n"
+                "Ang-Z: undefined"
+            )
+
+        def _axis_angle_deg(component: float) -> float:
+            cos_value = component / mag
+            if cos_value > 1.0:
+                cos_value = 1.0
+            elif cos_value < -1.0:
+                cos_value = -1.0
+            return math.degrees(math.acos(cos_value))
+
+        angle_x = _axis_angle_deg(vx)
+        angle_y = _axis_angle_deg(vy)
+        angle_z = _axis_angle_deg(vz)
+        return (
+            f"Vx: {vx:.8g}\n"
+            f"Vy: {vy:.8g}\n"
+            f"Vz: {vz:.8g}\n"
+            f"|V|: {mag:.8g}\n"
+            f"Ang-X: {angle_x:.6g} deg\n"
+            f"Ang-Y: {angle_y:.6g} deg\n"
+            f"Ang-Z: {angle_z:.6g} deg"
+        )
+
+    def _pick_world_position(
+        self, renderer: vtk.vtkRenderer, click_x: int, click_y: int
+    ) -> Optional[tuple[float, float, float]]:
+        picked = self._pointProbePicker.Pick(float(click_x), float(click_y), 0.0, renderer)
+        if picked > 0:
+            picked_pos = self._pointProbePicker.GetPickPosition()
+            if all(math.isfinite(v) for v in picked_pos):
+                return (float(picked_pos[0]), float(picked_pos[1]), float(picked_pos[2]))
+
+        world_picked = self._pointProbeWorldPicker.Pick(float(click_x), float(click_y), 0.0, renderer)
+        if world_picked > 0:
+            picked_pos = self._pointProbeWorldPicker.GetPickPosition()
+            if all(math.isfinite(v) for v in picked_pos):
+                return (float(picked_pos[0]), float(picked_pos[1]), float(picked_pos[2]))
+        return None
+
+    @staticmethod
+    def _normalized_vector(
+        x: float, y: float, z: float
+    ) -> Optional[tuple[float, float, float]]:
+        length = math.sqrt(x * x + y * y + z * z)
+        if not math.isfinite(length) or length <= 1.0e-12:
+            return None
+        return (x / length, y / length, z / length)
+
+    def _on_vtk_middle_button_press(self, _obj, _event) -> None:
+        self._middlePanActive = False
+        self._middlePanCamera = None
+        self._middlePanViewDirection = None
+        self._middlePanViewUp = None
+        if self.stackedWidget.currentIndex() != 0:
+            return
+        renderers = self.qvtkWidget.GetRenderWindow().GetRenderers()
+        if renderers.GetNumberOfItems() == 0:
+            return
+        renderer = renderers.GetFirstRenderer()
+        camera = renderer.GetActiveCamera()
+        if camera is None:
+            return
+
+        position = camera.GetPosition()
+        focal = camera.GetFocalPoint()
+        view_up = camera.GetViewUp()
+        view_direction = self._normalized_vector(
+            focal[0] - position[0], focal[1] - position[1], focal[2] - position[2]
+        )
+        normalized_up = self._normalized_vector(view_up[0], view_up[1], view_up[2])
+        if view_direction is None or normalized_up is None:
+            return
+
+        self._middlePanActive = True
+        self._middlePanCamera = camera
+        self._middlePanViewDirection = view_direction
+        self._middlePanViewUp = normalized_up
+
+    def _on_vtk_middle_button_release(self, _obj, _event) -> None:
+        self._middlePanActive = False
+        self._middlePanCamera = None
+        self._middlePanViewDirection = None
+        self._middlePanViewUp = None
+
+    def _on_vtk_mouse_move_lock_pan(self, _obj, _event) -> None:
+        if not self._middlePanActive:
+            return
+        camera = self._middlePanCamera
+        direction = self._middlePanViewDirection
+        view_up = self._middlePanViewUp
+        if camera is None or direction is None or view_up is None:
+            return
+
+        position = camera.GetPosition()
+        focal = camera.GetFocalPoint()
+        distance = math.sqrt(
+            (focal[0] - position[0]) ** 2
+            + (focal[1] - position[1]) ** 2
+            + (focal[2] - position[2]) ** 2
+        )
+        if not math.isfinite(distance) or distance <= 1.0e-12:
+            return
+
+        camera.SetFocalPoint(
+            position[0] + direction[0] * distance,
+            position[1] + direction[1] * distance,
+            position[2] + direction[2] * distance,
+        )
+        camera.SetViewUp(*view_up)
+        camera.OrthogonalizeViewUp()
+
+    def _on_vtk_left_button_press(self, _obj, _event) -> None:
+        def _forward_to_default_left_button() -> None:
+            if hasattr(_obj, "OnLeftButtonDown"):
+                _obj.OnLeftButtonDown()
+                return
+            interactor = self.qvtkWidget.GetRenderWindow().GetInteractor()
+            style = interactor.GetInteractorStyle() if interactor is not None else None
+            if style is not None and hasattr(style, "OnLeftButtonDown"):
+                style.OnLeftButtonDown()
+
+        if self.pointProbe_CB is None or not self.pointProbe_CB.isChecked():
+            _forward_to_default_left_button()
+            return
+        if self.stackedWidget.currentIndex() != 0:
+            _forward_to_default_left_button()
+            return
+
+        renderers = self.qvtkWidget.GetRenderWindow().GetRenderers()
+        if renderers.GetNumberOfItems() == 0:
+            _forward_to_default_left_button()
+            return
+        renderer = renderers.GetFirstRenderer()
+
+        interactor = self.qvtkWidget.GetRenderWindow().GetInteractor()
+        click_x, click_y = interactor.GetEventPosition()
+        world = self._pick_world_position(renderer, click_x, click_y)
+        if world is None:
+            self._set_point_probe_label(self.pointProbeCoordValue_LB, "-")
+            self._set_point_probe_label(self.pointProbeIndexValue_LB, "-")
+            self._set_point_probe_label(self.pointProbeDataValue_LB, "No point picked.")
+            return
+
+        self._set_point_probe_label(
+            self.pointProbeCoordValue_LB,
+            f"x: {world[0]:.6g}\n"
+            f"y: {world[1]:.6g}\n"
+            f"z: {world[2]:.6g}",
+        )
+
+        mode = self._current_point_probe_mode()
+        if mode == "vector":
+            index_ijk, vector_value, magnitude = self._sample_vector_value_at_world(world)
+            if index_ijk is None:
+                self._set_point_probe_label(self.pointProbeIndexValue_LB, "-")
+                if self._pointProbeVectorOutput is None:
+                    self._set_point_probe_label(self.pointProbeDataValue_LB, "No vector field loaded.")
+                else:
+                    self._set_point_probe_label(self.pointProbeDataValue_LB, "Point is outside vector data.")
+                return
+
+            self._set_point_probe_label(
+                self.pointProbeIndexValue_LB,
+                f"x: {index_ijk[0] + 1}\n"
+                f"y: {index_ijk[1] + 1}\n"
+                f"z: {index_ijk[2] + 1}",
+            )
+            self._set_point_probe_label(
+                self.pointProbeDataValue_LB,
+                self._format_vector_probe_text(vector_value, magnitude),
+            )
+            return
+
+        if mode == "scalar":
+            index_ijk, scalar_value = self._sample_scalar_value_at_world(world)
+            if index_ijk is None:
+                self._set_point_probe_label(self.pointProbeIndexValue_LB, "-")
+                if self._pointProbeScalarOutput is None:
+                    self._set_point_probe_label(self.pointProbeDataValue_LB, "No scalar field loaded.")
+                else:
+                    self._set_point_probe_label(self.pointProbeDataValue_LB, "Point is outside scalar data.")
+                return
+
+            self._set_point_probe_label(
+                self.pointProbeIndexValue_LB,
+                f"x: {index_ijk[0] + 1}\n"
+                f"y: {index_ijk[1] + 1}\n"
+                f"z: {index_ijk[2] + 1}",
+            )
+            if scalar_value is None:
+                self._set_point_probe_label(self.pointProbeDataValue_LB, "Scalar value unavailable.")
+            else:
+                self._set_point_probe_label(self.pointProbeDataValue_LB, f"{scalar_value:.8g}")
+            return
+
+        self._set_point_probe_label(self.pointProbeIndexValue_LB, "-")
+        self._set_point_probe_label(self.pointProbeDataValue_LB, "No probe data loaded.")
+        _forward_to_default_left_button()
+
+    def _update_point_probe_vector_dataset(
+        self,
+        vector_voi: tuple[int, int, int, int, int, int],
+    ) -> None:
+        probe_extractor = vtk.vtkExtractVOI()
+        probe_extractor.SetInputConnection(self.readerVectorOrigin.GetOutputPort())
+        probe_extractor.SetVOI(*vector_voi)
+        probe_extractor.SetSampleRate(1, 1, 1)
+        probe_extractor.Update()
+        self._pointProbeVectorExtractor = probe_extractor
+        self._pointProbeVectorOutput = probe_extractor.GetOutput()
+
+        choice_text = self.vectorChoice.currentText().strip() if self.vectorChoice.count() else ""
+        self._pointProbeVectorColumns = choice_text or "123"
+
+    def _clear_point_probe_vector_dataset(self) -> None:
+        self._pointProbeVectorExtractor = None
+        self._pointProbeVectorOutput = None
+        self._pointProbeVectorColumns = None
 
     def _update_coordinate_ruler(
         self,
@@ -392,20 +877,43 @@ class SimpleView(QtWidgets.QMainWindow):
         y0, y1_raw = sorted((ymin, ymax))
         z0, z1_raw = sorted((zmin, zmax))
 
-        x1 = max(1.0, float(x0 + 1))
-        x2 = max(x1, float(x1_raw + 1))
-        y1 = max(1.0, float(y0 + 1))
-        y2 = max(y1, float(y1_raw + 1))
-        z1 = max(1.0, float(z0 + 1))
-        z2 = max(z1, float(z1_raw + 1))
+        def _safe_positive_spacing(edit: QtWidgets.QLineEdit) -> float:
+            text = edit.text().strip()
+            if not text:
+                return 1.0
+            try:
+                value = float(text)
+            except ValueError:
+                return 1.0
+            if not math.isfinite(value) or value == 0:
+                return 1.0
+            return abs(value)
+
+        sx = _safe_positive_spacing(self.rescaleX_LE)
+        sy = _safe_positive_spacing(self.rescaleY_LE)
+        sz = _safe_positive_spacing(self.rescaleZ_LE)
+
+        x1 = float(x0 + 1) * sx
+        x2 = float(x1_raw + 1) * sx
+        y1 = float(y0 + 1) * sy
+        y2 = float(y1_raw + 1) * sy
+        z1 = float(z0 + 1) * sz
+        z2 = float(z1_raw + 1) * sz
+
+        if math.isclose(x1, x2):
+            x2 = x1 + sx
+        if math.isclose(y1, y2):
+            y2 = y1 + sy
+        if math.isclose(z1, z2):
+            z2 = z1 + sz
 
         self.coordRulerActor.SetBounds(
-            float(x0),
-            float(x1_raw),
-            float(y0),
-            float(y1_raw),
-            float(z0),
-            float(z1_raw),
+            float(x0) * sx,
+            float(x1_raw) * sx,
+            float(y0) * sy,
+            float(y1_raw) * sy,
+            float(z0) * sz,
+            float(z1_raw) * sz,
         )
         self.coordRulerActor.SetXAxisRange(x1, x2)
         self.coordRulerActor.SetYAxisRange(y1, y2)
@@ -874,8 +1382,14 @@ class SimpleView(QtWidgets.QMainWindow):
             self.updateVTK(self.scalarName, self.vectorName)
 
     def on_scalarChoice_currentIndexChanged(self, _index: int) -> None:
-        if self.scalarDir.exists():
-            self.scalarName = f"{self.scalarDir.absoluteFilePath()}.{self.scalarChoice.currentIndex()+1}.vtk"
+        if self.scalarChoice.count() <= 0:
+            return
+        base = self.scalarDir.absoluteFilePath()
+        if base:
+            self.scalarName = f"{base}.{self.scalarChoice.currentIndex()+1}.vtk"
+        self.updateFlag = False
+        if self.stackedWidget.currentIndex() == 0 and self.scalar_CB.isChecked():
+            self.slotUpdate()
 
     def slotOpenFile_vector(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Input", "", "Input (*.*)")
@@ -949,12 +1463,21 @@ class SimpleView(QtWidgets.QMainWindow):
             self.vectorName = file_path
             self.updateVTK(self.scalarName, self.vectorName)
 
-    def on_vectorChoice_currentIndexChanged(self, index: int) -> None:
-        if self.vectorDir.exists():
+    def on_vectorChoice_currentIndexChanged(self, index) -> None:
+        if self.vectorChoice.count() <= 0:
+            return
+        try:
+            index_value = int(index)
+        except (TypeError, ValueError):
+            index_value = self.vectorChoice.currentIndex()
+        base = self.vectorDir.absoluteFilePath()
+        if base:
             self.vectorName = (
-                f"{self.vectorDir.absoluteFilePath()}.{3*index+1}{3*index+2}{3*index+3}.vtk"
+                f"{base}.{3*index_value+1}{3*index_value+2}{3*index_value+3}.vtk"
             )
-            self.updateFlag = False
+        self.updateFlag = False
+        if self.stackedWidget.currentIndex() == 0 and self.vector_CB.isChecked():
+            self.slotUpdate()
 
     def slotOpenFile_domain(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Input", "", "Input (*.*)")
@@ -1346,6 +1869,11 @@ class SimpleView(QtWidgets.QMainWindow):
     def updateVTK(self, scalarname: str, vectorname: str) -> None:
         fileNameScalar = scalarname
         fileNameVector = vectorname
+        self._pointProbeScalarReader = None
+        self._pointProbeScalarExtractor = None
+        self._pointProbeScalarOutput = None
+        self._pointProbeScalarColumn = None
+        self._clear_point_probe_vector_dataset()
 
         renderer = vtk.vtkRenderer()
         if self.qvtkWidget.GetRenderWindow().GetRenderers().GetNumberOfItems() == 0:
@@ -1390,6 +1918,10 @@ class SimpleView(QtWidgets.QMainWindow):
                 readerScalar.SetVOI(scalar_extent)
                 ruler_extent = scalar_extent
             readerScalar.Update()
+            self._pointProbeScalarReader = readerScalarOrigin
+            self._pointProbeScalarExtractor = readerScalar
+            self._pointProbeScalarOutput = readerScalar.GetOutput()
+            self._pointProbeScalarColumn = self.scalarChoice.currentIndex() + 1 if self.scalarChoice.count() else 1
 
             if self.scalarRange_CB.isChecked():
                 vmin = float(self.scalarValueMin_LE.text() or scalar_range[0])
@@ -1488,10 +2020,12 @@ class SimpleView(QtWidgets.QMainWindow):
                 if ruler_extent is None:
                     ruler_extent = vector_voi
             else:
+                vector_voi = vector_extent
                 readerVector.SetVOI(vector_extent)
                 if ruler_extent is None:
                     ruler_extent = vector_extent
             readerVector.Update()
+            self._update_point_probe_vector_dataset(vector_voi)
 
             maskVector = vtk.vtkMaskPoints()
             maskVector.SetInputConnection(readerVector.GetOutputPort())
@@ -1786,6 +2320,10 @@ class SimpleView(QtWidgets.QMainWindow):
         else:
             self.updateCamera(0)
 
+        self._refresh_point_probe_source()
+        if self.pointProbe_CB is not None and self.pointProbe_CB.isChecked():
+            self._set_point_probe_hint()
+
     def updateCamera(self, choice: int) -> None:
         renderer = self.qvtkWidget.GetRenderWindow().GetRenderers().GetFirstRenderer()
         if choice == -1:
@@ -1843,6 +2381,14 @@ class SimpleView(QtWidgets.QMainWindow):
             return
         self.coordRulerActor.SetVisibility(enabled and self.stackedWidget.currentIndex() == 0)
         self.qvtkWidget.GetRenderWindow().Render()
+
+    def on_pointProbe_CB_stateChanged(self, state: int) -> None:
+        enabled = bool(state)
+        if not enabled:
+            self._reset_point_probe_display()
+            return
+        self._refresh_point_probe_source()
+        self._set_point_probe_hint()
 
     def on_outline_CB_stateChanged(self, state: int) -> None:
         enabled = bool(state)
@@ -3265,6 +3811,8 @@ class SimpleView(QtWidgets.QMainWindow):
             f.write(f"{self.vo2_M2_mod_LE.text()} {self.vo2_M2_ang_LE.text()}\n")
             if self.coordRuler_CB is not None:
                 f.write(f"{int(self.coordRuler_CB.checkState())}\n")
+            if self.pointProbe_CB is not None:
+                f.write(f"{int(self.pointProbe_CB.checkState())}\n")
 
     def slotOutputStatus(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save file", "", "Status (*.txt)")
@@ -3454,6 +4002,12 @@ class SimpleView(QtWidgets.QMainWindow):
             coord_ruler_state = 0
         if self.coordRuler_CB is not None:
             self.coordRuler_CB.setCheckState(coord_ruler_state)
+        try:
+            point_probe_state = int(next(it))
+        except StopIteration:
+            point_probe_state = 0
+        if self.pointProbe_CB is not None:
+            self.pointProbe_CB.setCheckState(point_probe_state)
 
     def slotLoadStatus(self) -> str:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Status input", "", "Status input (*.*)")

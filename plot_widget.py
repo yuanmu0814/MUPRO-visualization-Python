@@ -282,8 +282,16 @@ class QCustomPlot(QtWidgets.QWidget):
     def axisRect(self) -> _AxisRectCompat:
         return self._axis_rect
 
-    def savePng(self, path: str) -> None:
-        self._figure.savefig(path, dpi=300)
+    def savePng(self, path: str, width: int = 0, height: int = 0, dpi: int = 600) -> None:
+        if width > 0 and height > 0 and dpi > 0:
+            original_size = self._figure.get_size_inches()
+            try:
+                self._figure.set_size_inches(width / float(dpi), height / float(dpi))
+                self._figure.savefig(path, dpi=dpi)
+            finally:
+                self._figure.set_size_inches(original_size)
+        else:
+            self._figure.savefig(path, dpi=max(1, int(dpi)))
 
     def _apply_axis_state(self, axis: AxisCompat, mpl_axis: Any, is_x: bool) -> None:
         state = axis._state
