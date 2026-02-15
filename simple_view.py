@@ -682,10 +682,7 @@ class SimpleView(QtWidgets.QMainWindow):
         return (x / length, y / length, z / length)
 
     def _on_vtk_middle_button_press(self, _obj, _event) -> None:
-        self._middlePanActive = False
-        self._middlePanCamera = None
-        self._middlePanViewDirection = None
-        self._middlePanViewUp = None
+        self._clear_middle_pan_state()
         if self.stackedWidget.currentIndex() != 0:
             return
         renderers = self.qvtkWidget.GetRenderWindow().GetRenderers()
@@ -711,14 +708,29 @@ class SimpleView(QtWidgets.QMainWindow):
         self._middlePanViewDirection = view_direction
         self._middlePanViewUp = normalized_up
 
-    def _on_vtk_middle_button_release(self, _obj, _event) -> None:
+    def _clear_middle_pan_state(self) -> None:
         self._middlePanActive = False
         self._middlePanCamera = None
         self._middlePanViewDirection = None
         self._middlePanViewUp = None
 
+    def _is_middle_button_down(self) -> bool:
+        interactor = self.qvtkWidget.GetRenderWindow().GetInteractor()
+        if interactor is None or not hasattr(interactor, "GetMiddleButton"):
+            return self._middlePanActive
+        try:
+            return bool(interactor.GetMiddleButton())
+        except Exception:
+            return self._middlePanActive
+
+    def _on_vtk_middle_button_release(self, _obj, _event) -> None:
+        self._clear_middle_pan_state()
+
     def _on_vtk_mouse_move_lock_pan(self, _obj, _event) -> None:
         if not self._middlePanActive:
+            return
+        if not self._is_middle_button_down():
+            self._clear_middle_pan_state()
             return
         camera = self._middlePanCamera
         direction = self._middlePanViewDirection
