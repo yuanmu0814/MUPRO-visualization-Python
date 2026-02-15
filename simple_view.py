@@ -1280,9 +1280,10 @@ class SimpleView(QtWidgets.QMainWindow):
         except ValueError:
             self.outlineWidth = 1
 
-    def on_domain_Combo_currentIndexChanged(self, index: int) -> None:
-        self.domain_stack.setCurrentIndex(index)
-        self.domainCriteria_Stack.setCurrentIndex(index)
+    def on_domain_Combo_currentIndexChanged(self, index) -> None:
+        idx = index if isinstance(index, int) else self.domain_Combo.currentIndex()
+        self.domain_stack.setCurrentIndex(idx)
+        self.domainCriteria_Stack.setCurrentIndex(idx)
 
     def on_domainColor_Combo_currentIndexChanged(self, index: int) -> None:
         self.domainColor_Stack.setCurrentIndex(index)
@@ -1574,22 +1575,33 @@ class SimpleView(QtWidgets.QMainWindow):
         for i in range(27):
             threshold = vtk.vtkThreshold()
             surface = vtk.vtkDataSetSurfaceFilter()
-            smooth = vtk.vtkSmoothPolyDataFilter()
-            normal = vtk.vtkPolyDataNormals()
-            mapper = vtk.vtkDataSetMapper()
             threshold.SetInputConnection(readerDomain.GetOutputPort())
             threshold.AllScalarsOff()
             self._set_threshold_between(threshold, i - 0.5, i + 0.5)
             surface.SetInputConnection(threshold.GetOutputPort())
-            smooth.SetInputConnection(surface.GetOutputPort())
-            smooth.SetNumberOfIterations(30)
-            smooth.SetRelaxationFactor(0.1)
-            smooth.FeatureEdgeSmoothingOff()
-            smooth.BoundarySmoothingOn()
-            normal.SetInputConnection(smooth.GetOutputPort())
-            normal.ComputePointNormalsOn()
-            normal.ComputeCellNormalsOn()
-            mapper.SetInputConnection(normal.GetOutputPort())
+            surface.Update()
+            has_data = (
+                surface.GetOutput() is not None
+                and surface.GetOutput().GetNumberOfPoints() > 0
+                and surface.GetOutput().GetNumberOfCells() > 0
+            )
+            if has_data:
+                smooth = vtk.vtkSmoothPolyDataFilter()
+                normal = vtk.vtkPolyDataNormals()
+                mapper = vtk.vtkDataSetMapper()
+                smooth.SetInputConnection(surface.GetOutputPort())
+                smooth.SetNumberOfIterations(30)
+                smooth.SetRelaxationFactor(0.1)
+                smooth.FeatureEdgeSmoothingOff()
+                smooth.BoundarySmoothingOn()
+                normal.SetInputConnection(smooth.GetOutputPort())
+                normal.ComputePointNormalsOn()
+                normal.ComputeCellNormalsOn()
+                mapper.SetInputConnection(normal.GetOutputPort())
+            else:
+                mapper = vtk.vtkDataSetMapper()
+                empty_poly = vtk.vtkPolyData()
+                mapper.SetInputData(empty_poly)
             mapper.ScalarVisibilityOff()
             self.actorDomain[i].SetMapper(mapper)
             r, g, b = self.domainRGB[i]
@@ -1691,22 +1703,33 @@ class SimpleView(QtWidgets.QMainWindow):
         for i in range(9):
             threshold = vtk.vtkThreshold()
             surface = vtk.vtkDataSetSurfaceFilter()
-            smooth = vtk.vtkSmoothPolyDataFilter()
-            normal = vtk.vtkPolyDataNormals()
-            mapper = vtk.vtkDataSetMapper()
             threshold.SetInputConnection(readerDomain.GetOutputPort())
             threshold.AllScalarsOff()
             self._set_threshold_between(threshold, i - 0.5, i + 0.5)
             surface.SetInputConnection(threshold.GetOutputPort())
-            smooth.SetInputConnection(surface.GetOutputPort())
-            smooth.SetNumberOfIterations(30)
-            smooth.SetRelaxationFactor(0.1)
-            smooth.FeatureEdgeSmoothingOff()
-            smooth.BoundarySmoothingOn()
-            normal.SetInputConnection(smooth.GetOutputPort())
-            normal.ComputePointNormalsOn()
-            normal.ComputeCellNormalsOn()
-            mapper.SetInputConnection(normal.GetOutputPort())
+            surface.Update()
+            has_data = (
+                surface.GetOutput() is not None
+                and surface.GetOutput().GetNumberOfPoints() > 0
+                and surface.GetOutput().GetNumberOfCells() > 0
+            )
+            if has_data:
+                smooth = vtk.vtkSmoothPolyDataFilter()
+                normal = vtk.vtkPolyDataNormals()
+                mapper = vtk.vtkDataSetMapper()
+                smooth.SetInputConnection(surface.GetOutputPort())
+                smooth.SetNumberOfIterations(30)
+                smooth.SetRelaxationFactor(0.1)
+                smooth.FeatureEdgeSmoothingOff()
+                smooth.BoundarySmoothingOn()
+                normal.SetInputConnection(smooth.GetOutputPort())
+                normal.ComputePointNormalsOn()
+                normal.ComputeCellNormalsOn()
+                mapper.SetInputConnection(normal.GetOutputPort())
+            else:
+                mapper = vtk.vtkDataSetMapper()
+                empty_poly = vtk.vtkPolyData()
+                mapper.SetInputData(empty_poly)
             mapper.ScalarVisibilityOff()
             self.actorDomain[i].SetMapper(mapper)
             r, g, b = self.vo2DomainRGB[i]
