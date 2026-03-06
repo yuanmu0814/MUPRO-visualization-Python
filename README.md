@@ -9,5 +9,3 @@
 pip install -r requirements.txt
 python app.py
 ```
-### 调用拓扑图
-https://github.com/yuanmu0814/MUPRO-visualization-Python/blob/master/call_topology.png
